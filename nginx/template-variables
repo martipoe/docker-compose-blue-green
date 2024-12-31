@@ -1,0 +1,3 @@
+map $host $url_main {
+  default "$URL_MAIN";
+}

@@ -1,0 +1,42 @@
+## STATIC CONFIGURATION
+log:
+  level: INFO
+
+accessLog: {}
+
+api:
+  insecure: false
+  dashboard: false
+  debug: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "tcp://cetusguard:2375"
+    exposedByDefault: false
+    network: "traefik_proxy"
+  http:
+    endpoint: "http://dynamic:80/http.routers.main.yml"
+    pollInterval: "5s"
+    pollTimeout: "10s"
+
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: "/certs/cert.cert"
+        keyFile: "/certs/cert.key"
+  options:
+    default:
+      minVersion: VersionTLS12

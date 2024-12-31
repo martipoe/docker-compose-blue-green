@@ -1,0 +1,40 @@
+x-config-shared: &config-shared
+  networks:
+    - traefik_proxy
+  pull_policy: always
+
+services:
+  blue:
+    <<: *config-shared
+    image: ${DOCKER_IMAGE_BLUE}
+    container_name: blue
+    volumes:
+      - ./apache/blue.index.html:/var/www/html/index.html
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.blue-router.entrypoints=websecure"
+      - "traefik.http.routers.blue-router.service=blue"
+      - "traefik.http.routers.blue-router.rule=(Host(`${URL_BLUE}`))"
+      - "traefik.http.routers.blue-router.tls=true"
+      - "traefik.http.services.blue.loadbalancer.server.port=80"
+      - "traefik.http.services.blue.loadbalancer.server.scheme=http"
+      - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
+  green:
+    <<: *config-shared
+    image: ${DOCKER_IMAGE_GREEN}
+    container_name: green
+    volumes:
+      - ./apache/green.index.html:/var/www/html/index.html
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.green-router.entrypoints=websecure"
+      - "traefik.http.routers.green-router.service=green"
+      - "traefik.http.routers.green-router.rule=(Host(`${URL_GREEN}`))"
+      - "traefik.http.routers.green-router.tls=true"
+      - "traefik.http.services.green.loadbalancer.server.port=80"
+      - "traefik.http.services.green.loadbalancer.server.scheme=http"
+      - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
+
+networks:
+  traefik_proxy:
+    external: true
