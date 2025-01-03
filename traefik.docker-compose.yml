@@ -28,6 +28,7 @@ services:
     container_name: traefik
     restart: unless-stopped
     pull_policy: always
+    read_only: true
     volumes:
       - ./traefik/certs/cert.key:/traefik/certs/cert.key:ro
       - ./traefik/certs/cert.crt:/traefik/certs/cert.crt:ro
