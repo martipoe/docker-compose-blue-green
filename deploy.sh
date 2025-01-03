@@ -19,7 +19,7 @@ touch "${LOCKFILE}"
 
 # Validation checks
 if ! [ -f ".env" ]; then
-    echo "Failire: .env is missing."
+    echo "Failure: .env is missing."
     rm "${LOCKFILE}"
     exit 1
 else
