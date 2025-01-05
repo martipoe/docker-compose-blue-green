@@ -8,6 +8,13 @@ Workaround:
 - These issues did not arise with the [HTTP Provider](https://doc.traefik.io/traefik/providers/http/). This is why an Nginx container serves the dynamic configuration as yaml template via HTTP, using https://nginx.org/en/docs/http/ngx_http_sub_module.html for dynamic contents.
 - During Nginx container restarts (updates...), Traefik will keep the dynamic configuration in memory until the HTTP endpoint is reachable again.
 
+# Features
+
+- Blue-Green deployments - nodes are replaced interchangeably with each new container version.
+- Zero-Downtime
+- Tests: Docker HEALTHCHECK and HTTP status for primary and container-specific domains.
+- Rollbacks: If deployments fail, the container version is rolled back automatically.
+
 ## Prerequisites
 
 - Add domains in */etc/hosts*: `127.0.0.1 localhost main.lan blue.lan green.lan`
@@ -70,9 +77,13 @@ CONTAINER ID   IMAGE                             COMMAND                  CREATE
 ## Todos
 
 - deploy.sh:
-    - Add automatic rollbacks - currently the script only leaves the lock enabled to avoid re-runs until it is removed manually.
-    - Handling of additional commented tasks (database backups and migrations,...)
-    - Use `shellcheck deploy.sh -x` for new commits
+    - A true deployment usually needs additional tasks, like database backups and migrations (commented where applicable).
+        - These actions must also be considered during rollbacks. Until then, the script only leaves the lock enabled to avoid re-runs until issues have been fixed manually.
+    - Test behaviour with more slowly responding applications, might require changes to waits and timeouts.
+    - Always use `shellcheck deploy.sh -x` for new commits.
+    - Rewrite in a more suitable language like Python or Go?
 - Traefik:
     - Let's Encrypt
     - ACLs
+- HTTP provider:
+    - Currently the state of the active node is stored in nginx/dynamic/http.routers.main.yml, centralising this in .env would be better.
