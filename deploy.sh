@@ -63,7 +63,7 @@ else
 fi
 
 # Update image version in .env
-echo "Updating docker image version for ${CONTAINER_OLD} to ${DOCKER_IMAGE_NEW} in .env"
+echo "Updating docker image version for inactive container to ${DOCKER_IMAGE_NEW} in .env"
 if [[ "${CONTAINER_OLD}" == "blue" ]]; then
     sed -i "s|^DOCKER_IMAGE_GREEN=.*$|DOCKER_IMAGE_GREEN=${DOCKER_IMAGE_NEW}|g" .env
     CONTAINER_NEW="green"
@@ -127,13 +127,18 @@ yq -yi --arg c "${CONTAINER_NEW}" '.http.routers.main.service = $c + "@docker"' 
 sleep 10s
 
 # HTTP health check on primary url
-echo "Ensure the container ${CONTAINER_NEW} can be accessed at http://${URL_MAIN} with HTTP status code 200"
-HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL_MAIN}")
-if [[ "${HTTP_STATUS}" != '200' ]]; then
-    echo "Failure: HTTP check for https://${URL_MAIN} failed with code ${HTTP_STATUS}"
-    # Todo: Implement rollback here
-    exit 1
-fi
+echo "Ensure the container ${CONTAINER_NEW} is up at http://${URL_MAIN} with HTTP status code 200 for 5 seconds"
+for i in {1..5}; do
+    HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL_MAIN}")
+    if [[ "${HTTP_STATUS}" == '200' ]]; then
+        echo "Success: HTTP check for https://${URL_MAIN} with code ${HTTP_STATUS} [${i}/5]"
+    elif [[ "${HTTP_STATUS}" != '200' ]]; then
+        echo "Failure: HTTP check for https://${URL_MAIN} failed with code ${HTTP_STATUS}"
+        # Todo: Implement rollback here
+        exit 1
+    fi
+    sleep 1
+done
 
 # Todo: Implement database unlocking here if required
 
@@ -141,6 +146,13 @@ fi
 echo "Decomissioning outdated container ${CONTAINER_OLD}..."
 docker compose -f "${DOCKER_COMPOSE_CONFIG}" down "${CONTAINER_OLD}"
 
+# Ensures that an old container version is never run when ${DOCKER_COMPOSE_CONFIG} is restarted.
+echo "Updating docker image version for inactive container ${CONTAINER_OLD} to ${DOCKER_IMAGE_NEW} in .env"
+if [[ "${CONTAINER_OLD}" == "blue" ]]; then
+    sed -i "s|^DOCKER_IMAGE_BLUE=.*$|DOCKER_IMAGE_BLUE=${DOCKER_IMAGE_NEW}|g" .env
+elif [[ "${CONTAINER_OLD}" == "green" ]]; then
+    sed -i "s|^DOCKER_IMAGE_GREEN=.*$|DOCKER_IMAGE_GREEN=${DOCKER_IMAGE_NEW}|g" .env
+fi
 
 # Remove lockfile
 rm "${LOCKFILE}"
