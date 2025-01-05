@@ -1,12 +1,56 @@
 #!/bin/bash
 
+# Functions
+usage() {
+    echo "Usage: $0 [-i name:tag@sha256:*](required) [-f project.docker-compose.yml](required)"
+    exit 1
+}
+
+http_health_check() {
+    URL="$1"
+    for i in {1..3}; do
+        HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL}")
+        if [[ "${HTTP_STATUS}" == '200' ]]; then
+            echo "Success: HTTP check for https://${URL} with code ${HTTP_STATUS} [${i}/3]"
+        elif [[ "${HTTP_STATUS}" != '200' ]]; then
+            echo "Failure: HTTP check for https://${URL} failed with code ${HTTP_STATUS}"
+            return 1
+        fi
+        sleep 2
+    done
+    return 0
+}
+
+# Parse and validate command line options
+while getopts "i:f:" opt; do
+    case $opt in
+        i)  DOCKER_IMAGE_NEW=$OPTARG
+            if ! [[ "${DOCKER_IMAGE_NEW}" =~ ^.*:.*@sha256:[a-z0-9]{64}$ ]]; then
+                echo "Failure: Image name ${DOCKER_IMAGE_NEW} did not pass validation checks. Ensure the sha256-hash is included."
+                usage
+            fi
+            ;;
+        f)  DOCKER_COMPOSE_FILE=$OPTARG
+            # docker compose stack for which zero-downtime deploys are implemented, requires service "blue" and "green"
+            if ! [ -f "${DOCKER_COMPOSE_FILE}" ]; then
+                echo "Failure: ${DOCKER_COMPOSE_FILE} does not exist"
+                usage
+            fi
+            ;;
+        :)  echo 'Failure: Missing argument' >&2
+            usage
+            ;;
+        *)  echo 'Failure: Error in command line parsing' >&2
+            usage
+            ;;
+    esac
+done
+if [[ -z "${DOCKER_IMAGE_NEW}" || -z "${DOCKER_COMPOSE_FILE}" ]]; then
+    echo "Failure: Not all required options were passed"
+    usage
+fi
+
 set -euxo pipefail
-
-DOCKER_IMAGE_NEW="$1"
-
-DOCKER_COMPOSE_CONFIG="project.docker-compose.yml"
-# set to true if container provides integrated healthcheck
-DOCKER_HEALTHCHECK=false
 
 # Create lockfile to avoid race conditions due to multiple deploys
 LOCKFILE=./deploy.lock
@@ -17,7 +61,13 @@ fi
 touch "${LOCKFILE}"
 
 
-# Validation checks
+# Dependency checks
+if ! [[ $(dpkg -l yq) ]]; then
+    echo "Failure: Dependency yq is not installed (apt install yq)."
+    rm "${LOCKFILE}"
+    exit 1
+fi
+
 if ! [ -f ".env" ]; then
     echo "Failure: .env is missing."
     rm "${LOCKFILE}"
@@ -25,19 +75,6 @@ if ! [ -f ".env" ]; then
 else
     # requires URL_MAIN, URL_BLUE, URL_GREEN
     source .env
-fi
-
-if ! [[ $(dpkg -l yq) ]]; then
-    echo "Failure: Dependency yq is not installed (apt install yq)."
-    rm "${LOCKFILE}"
-    exit 1
-fi
-
-echo "Validating image name..."
-if ! [[ "${DOCKER_IMAGE_NEW}" =~ ^.*:.*@sha256:[a-z0-9]{64}$ ]]; then
-    echo "Failure: Image name ${DOCKER_IMAGE_NEW} did not pass validation checks. Ensure the sha256-hash is also provided."
-    rm "${LOCKFILE}"
-    exit 1
 fi
 
 
@@ -48,6 +85,7 @@ if ! [[ $(docker pull "${DOCKER_IMAGE_NEW}") ]]; then
     rm "${LOCKFILE}"
     exit 1
 fi
+
 
 # Detect running container from Traefik dynamic configuration
 echo "Detecting active container and image version..."
@@ -62,6 +100,7 @@ else
     echo "${CONTAINER_OLD} currently runs image ${DOCKER_IMAGE_OLD}"
 fi
 
+
 # Update image version in .env
 echo "Updating docker image version for inactive container to ${DOCKER_IMAGE_NEW} in .env"
 if [[ "${CONTAINER_OLD}" == "blue" ]]; then
@@ -74,47 +113,59 @@ fi
 
 # Todo: Implement backups for rollbacks here
 # Todo: Implement database locking here if required
+# ./deploy_pre.sh
 
-# Launch new container and wait 5 seconds until it is up
-echo "Starting ${CONTAINER_NEW} with docker image ${DOCKER_IMAGE_NEW} and wait 5s for container to start..."
-docker compose -f "${DOCKER_COMPOSE_CONFIG}" up -d "${CONTAINER_NEW}"
+
+# Wait for container to start up and perform health checks
+echo "Starting ${CONTAINER_NEW} with docker image ${DOCKER_IMAGE_NEW}"
+docker compose -f "${DOCKER_COMPOSE_FILE}" up -d "${CONTAINER_NEW}"
 sleep 5
 
 echo "Ensure container ${CONTAINER_NEW} uses the new image ${DOCKER_IMAGE_NEW}..."
 if ! [[ "$(docker inspect --format '{{.Config.Image}}' "${CONTAINER_NEW}")" == "${DOCKER_IMAGE_NEW}" ]]; then
     echo "Failure: Container ${CONTAINER_NEW} still uses the old image."
-    rm "${LOCKFILE}"
+    # Todo: Roll back image version in .env
     exit 1
 fi
 
-# Optional: Docker Healthcheck
-if [[ "${DOCKER_HEALTHCHECK}" == "true" ]]; then
-    echo "Checking Docker Healthcheck status..."
+echo "Checking Docker integrated HEALTHCHECK status..."
+if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}" 2>&1)" =~ 'map has no entry for key' ]]; then
+    echo "Warning: Container ${CONTAINER_NEW} has no integrated HEALTHCHECK, will skip and continue with HTTP check..."
+else
+    while [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")" == 'starting' ]]; do
+        echo "Docker HEALTHCHECK is pending, will retry in 1s..."
+        sleep 1
+    done
     if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")" == 'healthy' ]]; then
         echo "Container ${CONTAINER_NEW} is healthy"
+    elif [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")" == 'unhealthy' ]]; then
+        echo "Failure: Container ${CONTAINER_NEW} is unhealthy"
+        # Todo: Implement container version rollback here
+        exit 1
     else
-        echo "Failure: Healthcheck for container ${CONTAINER_NEW} failed, but container ${CONTAINER_OLD} is still active."
-        # Todo: Implement rollback here
+        echo "Failure: Unknown healthcheck status for ${CONTAINER_NEW}"
+        # Todo: Implement container version rollback here
         exit 1
     fi
 fi
 
 # Todo: Implement migrations for new image here
+# ./deploy_migrate.sh
 
-# HTTP health check on dedicated container url
-echo "Ensure the container ${CONTAINER_NEW} can be accessed with HTTP status code 200"
+# HTTP health checks for dedicated container urls
+echo "Ensure the container ${CONTAINER_NEW} is up at is dedicated URL with HTTP status code 200"
 if [[ "${CONTAINER_NEW}" == "blue" ]]; then
-    HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL_BLUE}")
-    if [[ "${HTTP_STATUS}" != '200' ]]; then
-        echo "Failure: HTTP check for https://${URL_BLUE} failed with code ${HTTP_STATUS}"
-        # Todo: Implement rollback here
+    http_health_check "${URL_BLUE}"
+    if [ $? -eq 1 ]; then
+        echo "Failure: HTTP healthcheck failed for ${URL_BLUE}"
+        # Todo: Implement migration and container rollback here
         exit 1
     fi
 elif [[ "${CONTAINER_NEW}" == "green" ]]; then
-    HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL_GREEN}")
-    if [[ "${HTTP_STATUS}" != '200' ]]; then
-        echo "Failure: HTTP check for https://${URL_GREEN} failed with code ${HTTP_STATUS}"
-        # Todo: Implement rollback here
+    http_health_check "${URL_GREEN}"
+    if [ $? -eq 1 ]; then
+        echo "Failure: HTTP healthcheck failed for ${URL_GREEN}"
+        # Todo: Implement migration and container rollback here
         exit 1
     fi
 fi
@@ -127,26 +178,22 @@ yq -yi --arg c "${CONTAINER_NEW}" '.http.routers.main.service = $c + "@docker"' 
 sleep 10s
 
 # HTTP health check on primary url
-echo "Ensure the container ${CONTAINER_NEW} is up at http://${URL_MAIN} with HTTP status code 200 for 5 seconds"
-for i in {1..5}; do
-    HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL_MAIN}")
-    if [[ "${HTTP_STATUS}" == '200' ]]; then
-        echo "Success: HTTP check for https://${URL_MAIN} with code ${HTTP_STATUS} [${i}/5]"
-    elif [[ "${HTTP_STATUS}" != '200' ]]; then
-        echo "Failure: HTTP check for https://${URL_MAIN} failed with code ${HTTP_STATUS}"
-        # Todo: Implement rollback here
-        exit 1
-    fi
-    sleep 1
-done
+echo "Ensure the container ${CONTAINER_NEW} is up at http:s//${URL_MAIN} with HTTP status code 200"
+http_health_check "${URL_MAIN}"
+if [ $? -eq 1 ]; then
+    echo "Failure: HTTP healthcheck failed for ${URL_MAIN}"
+    # Todo: Implement migration and container rollback here
+    exit 1
+fi
 
 # Todo: Implement database unlocking here if required
+# ./deploy_post.sh
 
 # Cleanup
 echo "Decomissioning outdated container ${CONTAINER_OLD}..."
-docker compose -f "${DOCKER_COMPOSE_CONFIG}" down "${CONTAINER_OLD}"
+docker compose -f "${DOCKER_COMPOSE_FILE}" down "${CONTAINER_OLD}"
 
-# Ensures that an old container version is never run when ${DOCKER_COMPOSE_CONFIG} is restarted.
+# Ensures that an old container version is never run when ${DOCKER_COMPOSE_FILE} is restarted.
 echo "Updating docker image version for inactive container ${CONTAINER_OLD} to ${DOCKER_IMAGE_NEW} in .env"
 if [[ "${CONTAINER_OLD}" == "blue" ]]; then
     sed -i "s|^DOCKER_IMAGE_BLUE=.*$|DOCKER_IMAGE_BLUE=${DOCKER_IMAGE_NEW}|g" .env

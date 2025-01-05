@@ -38,23 +38,25 @@ while true; do
 done
 ```
 
-Deploy new container version #1: `bash deploy.sh "php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820"`
+Deploy new container version #1: `bash deploy.sh -i "php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820" -f "project.docker-compose.yml"`
 ```bash
-# blue is updated in .env
+# containers are updated in .env
 DOCKER_IMAGE_BLUE=php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820
-DOCKER_IMAGE_GREEN=php:8.2.27-apache@sha256:56d8b242c3430aa5eb27fc112194d2b22c5c72fe7c3b3db0940639f735154c55
+DOCKER_IMAGE_GREEN=php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820
 
+# blue is running with updated image
 :~$ docker ps
 CONTAINER ID   IMAGE                     COMMAND                  CREATED          STATUS          PORTS                                      NAMES
 c514e4d21936   php:8.3-apache            "docker-php-entrypoi…"   44 seconds ago   Up 42 seconds   80/tcp                                     blue
 ```
 
-Deploy new container version #2: `bash deploy.sh "php:8.4.2-apache@sha256:2c9ae64a55950a3b44c5121cae9b1dc82601e9ff2a0ed0279d02c047019ca53d"`
+Deploy new container version #2: `bash deploy.sh -i "php:8.4.2-apache@sha256:2c9ae64a55950a3b44c5121cae9b1dc82601e9ff2a0ed0279d02c047019ca53d" -f "project.docker-compose.yml"`
 ```bash
-# green is updated in .env
-DOCKER_IMAGE_BLUE=php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820
+# containers are updated in .env
+DOCKER_IMAGE_BLUE=php:8.4.2-apache@sha256:2c9ae64a55950a3b44c5121cae9b1dc82601e9ff2a0ed0279d02c047019ca53d
 DOCKER_IMAGE_GREEN=php:8.4.2-apache@sha256:2c9ae64a55950a3b44c5121cae9b1dc82601e9ff2a0ed0279d02c047019ca53d
 
+# green is running with updated image
 :~$ docker ps
 CONTAINER ID   IMAGE                     COMMAND                  CREATED              STATUS              PORTS                                      NAMES
 7f2a89711237   php:8.4.2-apache          "docker-php-entrypoi…"   18 seconds ago       Up 16 seconds       80/tcp                                     green
