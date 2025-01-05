@@ -43,18 +43,20 @@ set -euxo pipefail
 
 http_health_check() {
     URL="$1"
-    for i in {1..3}; do
+    # perform up to 5 health checks every 3s, container may start slowly
+    for i in {1..5}; do
         HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL}")
         if [[ "${HTTP_STATUS}" == '200' ]]; then
-            echo "Success: HTTP check for https://${URL} returned code ${HTTP_STATUS} [${i}/3]"
-        elif [[ "${HTTP_STATUS}" != '200' ]]; then
-            echo "Failure: HTTP check for https://${URL} returned code ${HTTP_STATUS}"
-            set +e
-            return 1
+            echo "Success: HTTP check for https://${URL} returned code ${HTTP_STATUS}"
+            return 0
+        else
+            echo "Failure: HTTP check for https://${URL} returned code ${HTTP_STATUS} [${1}/3]"
+            sleep 3
         fi
-        sleep 2
     done
-    return 0
+    # if retries failed, do not exit script and return failure
+    set +e
+    return 1
 }
 
 rollback_container(){
@@ -155,19 +157,20 @@ fi
 
 echo "Get Docker integrated HEALTHCHECK status"
 if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}" 2>&1)" =~ 'map has no entry for key' ]]; then
-    echo "Warning: Container ${CONTAINER_NEW} has no integrated HEALTHCHECK, will skip to HTTP check"
+    echo "Warning: Image ${DOCKER_IMAGE_NEW} has no integrated HEALTHCHECK, will skip to HTTP check"
 else
-    for i in {1..10}; do
+    # perform up to 5 health checks every 3s, container may start slowly
+    for i in {1..5}; do
         HEALTHCHECK_STATUS="$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")"
         case "${HEALTHCHECK_STATUS}" in
             starting)
                 if [[ "${i}" -eq 5 ]]; then
-                    echo "Failure: Docker HEALTHCHECK is stuck in starting state for 10s"
+                    echo "Failure: Docker HEALTHCHECK is stuck in starting state"
                     rollback_container
                     rm "${LOCKFILE}" && exit 1
                 else
-                    echo "Warning: Docker HEALTHCHECK is starting, will re-check (${i}/10)"
-                    sleep 1
+                    echo "Warning: Docker HEALTHCHECK is starting, will re-check (${i}/5)"
+                    sleep 3
                 fi
                 ;;
             healthy)
