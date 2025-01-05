@@ -157,21 +157,35 @@ echo "Get Docker integrated HEALTHCHECK status"
 if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}" 2>&1)" =~ 'map has no entry for key' ]]; then
     echo "Warning: Container ${CONTAINER_NEW} has no integrated HEALTHCHECK, will skip to HTTP check"
 else
-    while [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")" == 'starting' ]]; do
-        echo "Warning: Docker HEALTHCHECK is pending, will retry in 1s"
-        sleep 1
+    for i in {1..10}; do
+        HEALTHCHECK_STATUS="$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")"
+        case "${HEALTHCHECK_STATUS}" in
+            starting)
+                if [[ "${i}" -eq 5 ]]; then
+                    echo "Failure: Docker HEALTHCHECK is stuck in starting state for 10s"
+                    rollback_container
+                    rm "${LOCKFILE}" && exit 1
+                else
+                    echo "Warning: Docker HEALTHCHECK is starting, will re-check (${i}/10)"
+                    sleep 1
+                fi
+                ;;
+            healthy)
+                echo "Container ${CONTAINER_NEW} is healthy"
+                break
+                ;;
+            unhealthy)
+                echo "Failure: Container ${CONTAINER_NEW} is unhealthy"
+                rollback_container
+                rm "${LOCKFILE}" && exit 1
+                ;;
+            *)
+                echo "Failure: Unknown HEALTHCHECK status for ${CONTAINER_NEW}"
+                rollback_container
+                rm "${LOCKFILE}" && exit 1
+                ;;
+        esac
     done
-    if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")" == 'healthy' ]]; then
-        echo "Container ${CONTAINER_NEW} is healthy"
-    elif [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")" == 'unhealthy' ]]; then
-        echo "Failure: Container ${CONTAINER_NEW} is unhealthy"
-        rollback_container
-        rm "${LOCKFILE}" && exit 1
-    else
-        echo "Failure: Unknown healthcheck status for ${CONTAINER_NEW}"
-        rollback_container
-        rm "${LOCKFILE}" && exit 1
-    fi
 fi
 
 # Todo: Implement migrations for new image here
