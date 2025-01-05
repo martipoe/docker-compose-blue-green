@@ -27,8 +27,8 @@ docker compose -f project.docker-compose.yml up -d
 *.env*:
 ```bash
 # old images
-DOCKER_IMAGE_BLUE=php:8.2.27-apache@sha256:56d8b242c3430aa5eb27fc112194d2b22c5c72fe7c3b3db0940639f735154c55
-DOCKER_IMAGE_GREEN=php:8.2.27-apache@sha256:56d8b242c3430aa5eb27fc112194d2b22c5c72fe7c3b3db0940639f735154c55
+DOCKER_IMAGE_BLUE=serversideup/php:8.2-fpm-apache@sha256:0d08c8277aefcbf2780e94774d8a3464cbcf0d701c0a78795a6c2c0432beef0d
+DOCKER_IMAGE_GREEN=serversideup/php:8.2-fpm-apache@sha256:0d08c8277aefcbf2780e94774d8a3464cbcf0d701c0a78795a6c2c0432beef0d
 ```
 
 Run continuous HTTP check:
@@ -38,28 +38,28 @@ while true; do
 done
 ```
 
-Deploy new container version #1: `bash deploy.sh -i "php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820" -f "project.docker-compose.yml"`
+Deploy new container version #1: `bash deploy.sh -i "serversideup/php:8.3-fpm-apache@sha256:379a43f6285f665ee1e0a37875fe6222b712d2b23a3c20b342d57893af9a7ff0" -f "project.docker-compose.yml"`
 ```bash
 # containers are updated in .env
-DOCKER_IMAGE_BLUE=php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820
-DOCKER_IMAGE_GREEN=php:8.3-apache@sha256:fce243539486d99cfefba35724ec485fd6078f1d4928feba5728d3ca587f8820
+DOCKER_IMAGE_BLUE=serversideup/php:8.3-fpm-apache@sha256:379a43f6285f665ee1e0a37875fe6222b712d2b23a3c20b342d57893af9a7ff0
+DOCKER_IMAGE_GREEN=serversideup/php:8.3-fpm-apache@sha256:379a43f6285f665ee1e0a37875fe6222b712d2b23a3c20b342d57893af9a7ff0
 
 # blue is running with updated image
 :~$ docker ps
-CONTAINER ID   IMAGE                     COMMAND                  CREATED          STATUS          PORTS                                      NAMES
-c514e4d21936   php:8.3-apache            "docker-php-entrypoi…"   44 seconds ago   Up 42 seconds   80/tcp                                     blue
+CONTAINER ID   IMAGE                             COMMAND                  CREATED          STATUS                    PORTS                                      NAMES
+b964420275d7   serversideup/php:8.3-fpm-apache   "docker-php-serversi…"   44 seconds ago   Up 33 seconds (healthy)   8080/tcp, 8443/tcp, 9000/tcp               blue
 ```
 
-Deploy new container version #2: `bash deploy.sh -i "php:8.4.2-apache@sha256:2c9ae64a55950a3b44c5121cae9b1dc82601e9ff2a0ed0279d02c047019ca53d" -f "project.docker-compose.yml"`
+Deploy new container version #2: `bash deploy.sh -i "serversideup/php:8.4-fpm-apache@sha256:7584df1eab8e93dc9e1077b6ac7d752f3e2b12e32009ef5bb0b08e824c5720c6" -f "project.docker-compose.yml"`
 ```bash
 # containers are updated in .env
-DOCKER_IMAGE_BLUE=php:8.4.2-apache@sha256:2c9ae64a55950a3b44c5121cae9b1dc82601e9ff2a0ed0279d02c047019ca53d
-DOCKER_IMAGE_GREEN=php:8.4.2-apache@sha256:2c9ae64a55950a3b44c5121cae9b1dc82601e9ff2a0ed0279d02c047019ca53d
+DOCKER_IMAGE_BLUE=serversideup/php:8.4-fpm-apache@sha256:7584df1eab8e93dc9e1077b6ac7d752f3e2b12e32009ef5bb0b08e824c5720c6
+DOCKER_IMAGE_GREEN=serversideup/php:8.4-fpm-apache@sha256:7584df1eab8e93dc9e1077b6ac7d752f3e2b12e32009ef5bb0b08e824c5720c6
 
 # green is running with updated image
 :~$ docker ps
-CONTAINER ID   IMAGE                     COMMAND                  CREATED              STATUS              PORTS                                      NAMES
-7f2a89711237   php:8.4.2-apache          "docker-php-entrypoi…"   18 seconds ago       Up 16 seconds       80/tcp                                     green
+CONTAINER ID   IMAGE                             COMMAND                  CREATED          STATUS                    PORTS                                      NAMES
+79e359d3b1e3   serversideup/php:8.4-fpm-apache   "docker-php-serversi…"   40 seconds ago   Up 39 seconds (healthy)   8080/tcp, 8443/tcp, 9000/tcp               green
 ```
 
 ## Caveats

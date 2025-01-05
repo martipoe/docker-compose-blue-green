@@ -9,14 +9,14 @@ services:
     image: ${DOCKER_IMAGE_BLUE}
     container_name: blue
     volumes:
-      - ./apache/blue.index.php:/var/www/html/index.php
+      - ./apache/blue.index.php:/var/www/html/public/index.php
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.blue-router.entrypoints=websecure"
       - "traefik.http.routers.blue-router.service=blue"
       - "traefik.http.routers.blue-router.rule=(Host(`${URL_BLUE}`))"
       - "traefik.http.routers.blue-router.tls=true"
-      - "traefik.http.services.blue.loadbalancer.server.port=80"
+      - "traefik.http.services.blue.loadbalancer.server.port=8080"
       - "traefik.http.services.blue.loadbalancer.server.scheme=http"
       - "traefik.http.services.blue.loadbalancer.healthcheck.interval=2s"
       - "traefik.http.services.blue.loadbalancer.healthcheck.timeout=10s"
@@ -30,14 +30,14 @@ services:
     image: ${DOCKER_IMAGE_GREEN}
     container_name: green
     volumes:
-      - ./apache/green.index.php:/var/www/html/index.php
+      - ./apache/green.index.php:/var/www/html/public/index.php
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.green-router.entrypoints=websecure"
       - "traefik.http.routers.green-router.service=green"
       - "traefik.http.routers.green-router.rule=(Host(`${URL_GREEN}`))"
       - "traefik.http.routers.green-router.tls=true"
-      - "traefik.http.services.green.loadbalancer.server.port=80"
+      - "traefik.http.services.green.loadbalancer.server.port=8080"
       - "traefik.http.services.green.loadbalancer.server.scheme=http"
       - "traefik.http.services.green.loadbalancer.healthcheck.interval=2s"
       - "traefik.http.services.green.loadbalancer.healthcheck.timeout=10s"
