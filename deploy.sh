@@ -75,7 +75,7 @@ fi
 # Todo: Implement backups for rollbacks here
 # Todo: Implement database locking here if required
 
-# Launch new container
+# Launch new container and wait 5 seconds until it is up
 echo "Starting ${CONTAINER_NEW} with docker image ${DOCKER_IMAGE_NEW} and wait 5s for container to start..."
 docker compose -f "${DOCKER_COMPOSE_CONFIG}" up -d "${CONTAINER_NEW}"
 sleep 5
@@ -122,7 +122,9 @@ fi
 # Promote new container to serve requests on primary url
 echo "Switching traffic to ${CONTAINER_NEW}..."
 yq -yi --arg c "${CONTAINER_NEW}" '.http.routers.main.service = $c + "@docker"' nginx/dynamic/http.routers.main.yml
-sleep 3
+
+# Wait 10s for Traefik to pick up configuration changes
+sleep 10s
 
 # HTTP health check on primary url
 echo "Ensure the container ${CONTAINER_NEW} can be accessed at http://${URL_MAIN} with HTTP status code 200"

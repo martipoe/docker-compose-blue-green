@@ -22,6 +22,7 @@ entryPoints:
     address: ":443"
 
 providers:
+  providersThrottleDuration: 5s
   docker:
     endpoint: "tcp://cetusguard:2375"
     exposedByDefault: false
@@ -29,7 +30,7 @@ providers:
   http:
     endpoint: "http://dynamic:80/http.routers.main.yml"
     pollInterval: "5s"
-    pollTimeout: "10s"
+    pollTimeout: "5s"
 
 tls:
   stores:

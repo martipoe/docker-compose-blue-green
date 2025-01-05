@@ -9,7 +9,7 @@ services:
     image: ${DOCKER_IMAGE_BLUE}
     container_name: blue
     volumes:
-      - ./apache/blue.index.html:/var/www/html/index.html
+      - ./apache/blue.index.php:/var/www/html/index.php
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.blue-router.entrypoints=websecure"
@@ -18,13 +18,19 @@ services:
       - "traefik.http.routers.blue-router.tls=true"
       - "traefik.http.services.blue.loadbalancer.server.port=80"
       - "traefik.http.services.blue.loadbalancer.server.scheme=http"
+      - "traefik.http.services.blue.loadbalancer.healthcheck.interval=2s"
+      - "traefik.http.services.blue.loadbalancer.healthcheck.timeout=10s"
+      - "traefik.http.routers.blue-router.middlewares=blue-retry"
+      - "traefik.http.middlewares.blue-retry.retry.attempts=5"
+      - "traefik.http.middlewares.blue-retry.retry.initialinterval=100ms"
       - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
+
   green:
     <<: *config-shared
     image: ${DOCKER_IMAGE_GREEN}
     container_name: green
     volumes:
-      - ./apache/green.index.html:/var/www/html/index.html
+      - ./apache/green.index.php:/var/www/html/index.php
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.green-router.entrypoints=websecure"
@@ -33,6 +39,11 @@ services:
       - "traefik.http.routers.green-router.tls=true"
       - "traefik.http.services.green.loadbalancer.server.port=80"
       - "traefik.http.services.green.loadbalancer.server.scheme=http"
+      - "traefik.http.services.green.loadbalancer.healthcheck.interval=2s"
+      - "traefik.http.services.green.loadbalancer.healthcheck.timeout=10s"
+      - "traefik.http.routers.green-router.middlewares=green-retry"
+      - "traefik.http.middlewares.green-retry.retry.attempts=5"
+      - "traefik.http.middlewares.green-retry.retry.initialinterval=100ms"
       - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
 
 networks:

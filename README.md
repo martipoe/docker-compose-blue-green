@@ -35,7 +35,6 @@ Run continuous HTTP check:
 ```bash
 while true; do
     curl -k https://main.lan
-    sleep 1
 done
 ```
 
