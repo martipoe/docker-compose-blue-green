@@ -104,5 +104,3 @@ CONTAINER ID   IMAGE                             COMMAND                  CREATE
 - Traefik:
     - Let's Encrypt
     - ACLs
-- HTTP provider:
-    - Currently the state of the active node is stored in nginx/dynamic/dynamic.yml, centralising this in .env would be better.
