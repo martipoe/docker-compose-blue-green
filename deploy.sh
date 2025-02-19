@@ -1,173 +1,202 @@
 #!/bin/bash
 
-# Parse and validate command line options
+# Timestamp function for better logging
+timestamp() {
+    date +"%Y-%m-%d %T"
+}
+
+# Print a message with a timestamp
+log_message() {
+    local level="$1"
+    local message="$2"
+    echo "$(timestamp) ${level}: ${message}"
+}
+
+# Print usage and exit
 usage() {
-    echo "Usage: $0 [-i image:tag@sha256:*](required) [-f project.docker-compose.yml](required)"
+    log_message "ERROR" "Usage: $0 [-i image:tag@sha256:*] (required) [-f project.docker-compose.yml] (required)"
     exit 1
 }
 
 # Parse and validate command line options
 while getopts "i:f:" opt; do
     case $opt in
-        i)  DOCKER_IMAGE_NEW=$OPTARG
+        i)
+            DOCKER_IMAGE_NEW=$OPTARG
             if ! [[ "${DOCKER_IMAGE_NEW}" =~ ^.*:.*@sha256:[a-z0-9]{64}$ ]]; then
-                echo "Failure: Image ${DOCKER_IMAGE_NEW} did not pass validation checks, ensure sha256-hash is included"
+                log_message "ERROR" "Invalid Docker image format: ${DOCKER_IMAGE_NEW}. Ensure sha256 hash is included."
                 usage
             fi
             ;;
-        f)  DOCKER_COMPOSE_FILE=$OPTARG
-            # Docker Compose stack for which zero-downtime deploys are implemented, requires services "blue" and "green"
+        f)
+            DOCKER_COMPOSE_FILE=$OPTARG
             if ! [ -f "${DOCKER_COMPOSE_FILE}" ]; then
-                echo "Failure: ${DOCKER_COMPOSE_FILE} does not exist"
+                log_message "ERROR" "Docker compose file ${DOCKER_COMPOSE_FILE} does not exist."
                 usage
             fi
             ;;
-        :)  echo 'Failure: Missing argument' >&2
+        :)
+            log_message "ERROR" "Missing argument for option -$OPTARG"
             usage
             ;;
-        *)  echo 'Failure: Error in command line parsing' >&2
+        *)
+            log_message "ERROR" "Invalid option -$OPTARG"
             usage
             ;;
     esac
 done
+
+# Ensure required options are set
 if [[ -z "${DOCKER_IMAGE_NEW}" || -z "${DOCKER_COMPOSE_FILE}" ]]; then
-    echo "Failure: Required options missing"
+    log_message "ERROR" "Missing required options."
     usage
 fi
 
+# Set bash options for error handling
+set -euo pipefail
 
-set -euxo pipefail
+# Perform HTTP health check (live or staging)
+http_health_check() {
+    local URL="$1"
+    local NODE_EXPECTED="$2"
+    local TARGET="$3"
 
+    local HEADER=""
+    case "${TARGET}" in
+        live) HEADER='' ;;
+        staging) HEADER='X-Deployment-Status: staging' ;;
+        *)
+            log_message "WARNING" "Unknown Target ${TARGET}"
+            return 1
+            ;;
+    esac
 
-# Functions
+    log_message "INFO" "Checking health for ${NODE_EXPECTED} at ${URL}..."
+    sleep 5
 
-http_health_check_live() {
-    URL="$1"
-    NODE_EXPECTED="$2"
-    # perform up to 5 health checks every 3s, container may start slowly
     for i in {1..5}; do
-        HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL}")
-        CUSTOM_HEADER=$(curl -k -I --silent --output /dev/null --write-out '%header{x-deployment-node}' "https://${URL}")
+        HTTP_STATUS=$(curl --header "${HEADER}" -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL}")
+        CUSTOM_HEADER=$(curl --header "${HEADER}" -I -k --silent --output /dev/null --write-out '%header{x-deployment-node}' "https://${URL}")
 
         if [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
-            echo "Success: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS}"
+            log_message "INFO" "Node ${NODE_EXPECTED} is healthy, status: ${HTTP_STATUS}"
             return 0
-        elif [[ "${HTTP_STATUS}" != '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
-            echo "Failure: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS} [${1}/3]"
-            sleep 3
-        elif [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" != "${NODE_EXPECTED}" ]]; then
-            echo "Failure: Requests are not answered by Staging node ${NODE_EXPECTED} [${1}/3]"
-            sleep 3
         else
-            echo "Failure: Unknown error, status code ${HTTP_STATUS}, node ${CUSTOM_HEADER}"
+            log_message "WARNING" "${NODE_EXPECTED} returned ${HTTP_STATUS} with header ${CUSTOM_HEADER}. Retrying [${i}/5]..."
             sleep 3
         fi
     done
-    # if retries failed, do not exit script and return failure
-    set +e
+
     return 1
 }
 
-http_health_check_staging() {
-    URL="$1"
-    NODE_EXPECTED="$2"
-    # perform up to 5 health checks every 3s, container may start slowly
-    for i in {1..5}; do
-        HTTP_STATUS=$(curl --header 'X-Deployment-Status: staging' -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL}")
-        CUSTOM_HEADER=$(curl -I --header 'X-Deployment-Status: staging' -k --silent --output /dev/null --write-out '%header{x-deployment-node}' "https://${URL}")
+# Check Docker container health
+dockerhealth_status() {
+    local CONTAINER="$1"
 
-        if [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
-            echo "Success: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS}"
-            return 0
-        elif [[ "${HTTP_STATUS}" != '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
-            echo "Failure: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS} [${1}/3]"
-            sleep 3
-        elif [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" != "${NODE_EXPECTED}" ]]; then
-            echo "Failure: Requests are not answered by Staging node ${NODE_EXPECTED} [${1}/3]"
-            sleep 3
-        else
-            echo "Failure: Unknown error, status code ${HTTP_STATUS}, node ${CUSTOM_HEADER}"
-            sleep 3
-        fi
-    done
-    # if retries failed, do not exit script and return failure
-    set +e
-    return 1
+    if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER}" 2>&1)" =~ 'map has no entry for key' ]]; then
+        log_message "INFO" "No integrated HEALTHCHECK for container ${CONTAINER}, skipping."
+        return 0
+    else
+        sleep 10
+        for i in {1..6}; do
+            HEALTHCHECK_STATUS="$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER}")"
+            case "${HEALTHCHECK_STATUS}" in
+                starting)
+                    log_message "INFO" "Docker HEALTHCHECK is starting for ${CONTAINER}, retrying [${i}/6]."
+                    sleep 10
+                    ;;
+                healthy)
+                    log_message "INFO" "Container ${CONTAINER} is healthy."
+                    return 0
+                    ;;
+                unhealthy)
+                    log_message "ERROR" "Container ${CONTAINER} is unhealthy."
+                    return 1
+                    ;;
+                *)
+                    log_message "ERROR" "Unknown HEALTHCHECK status for ${CONTAINER}: ${HEALTHCHECK_STATUS}"
+                    return 1
+                    ;;
+            esac
+        done
+    fi
 }
 
-rollback_container(){
-    # Reset container to previous state
-    echo "Remove unhealthy container ${CONTAINER_NEW}"
+# Rollback container to the previous state
+rollback_container() {
+    log_message "INFO" "Rolling back container ${CONTAINER_NEW} to previous state."
+
+    # Bring down the new container
     docker compose -f "${DOCKER_COMPOSE_FILE}" down "${CONTAINER_NEW}"
-    echo "Reset docker image version for ${CONTAINER_NEW} to ${DOCKER_IMAGE_OLD} in .env"
+
+    # Reset image version in .env
     if [[ "${CONTAINER_NEW}" == "blue" ]]; then
         sed -i "s|^DOCKER_IMAGE_BLUE=.*$|DOCKER_IMAGE_BLUE=${DOCKER_IMAGE_OLD}|g" .env
     elif [[ "${CONTAINER_NEW}" == "green" ]]; then
         sed -i "s|^DOCKER_IMAGE_GREEN=.*$|DOCKER_IMAGE_GREEN=${DOCKER_IMAGE_OLD}|g" .env
     fi
-    echo "Container ${CONTAINER_NEW} rolled back to previous state"
-    echo "Ensure Traefik dynamic configuration is reset to previous state"
+
+    # Reset Traefik dynamic configuration
+    log_message "INFO" "Resetting Traefik dynamic configuration."
     yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
     yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
-    http_health_check_live "${URL_MAIN}" "${CONTAINER_OLD}"
+
+    # Health check for live node
+    http_health_check "${URL_MAIN}" "${CONTAINER_OLD}" "live"
     if [ $? -eq 1 ]; then
-        echo "Failure: ${URL_MAIN} is still served by ${CONTAINER_NEW}"
+        log_message "ERROR" "${URL_MAIN} is still served by ${CONTAINER_NEW}, rollback failed."
         exit 1
     fi
-    return 0
 }
 
-
-# Create lockfile to avoid race conditions due to multiple deploys
+# Lockfile check to prevent race conditions
 LOCKFILE=./deploy.lock
 if [ -f "${LOCKFILE}" ]; then
-    echo "Failure: Lock file exists - previous deployment either failed or is still running"
+    log_message "ERROR" "Lock file exists. Previous deployment either failed or is still running."
     exit 1
 fi
 touch "${LOCKFILE}"
 
-
-# Dependency checks
-if ! [[ $(dpkg -l yq) ]]; then
-    echo "Failure: Dependency yq is missing ('apt install yq')"
+# Dependency check for 'yq'
+if ! dpkg -l yq &>/dev/null; then
+    log_message "ERROR" "Dependency 'yq' is missing. Install with 'apt install yq'."
     rm "${LOCKFILE}"
     exit 1
 fi
 
+# Ensure .env exists
 if ! [ -f ".env" ]; then
-    echo "Failure: .env is missing"
+    log_message "ERROR" ".env file missing."
     rm "${LOCKFILE}"
     exit 1
 else
-    # requires URL_MAIN and CONTAINER_LIVE
+    # Load .env variables
     source .env
 fi
 
-
-# Pull docker image
-echo "Pull docker image ${DOCKER_IMAGE_NEW}"
-if ! [[ $(docker pull "${DOCKER_IMAGE_NEW}") ]]; then
-    echo "Failure: ${DOCKER_IMAGE_NEW} is not available"
+# Pull Docker image
+log_message "INFO" "Pulling Docker image ${DOCKER_IMAGE_NEW}..."
+if ! docker pull "${DOCKER_IMAGE_NEW}" &>/dev/null; then
+    log_message "ERROR" "Docker image ${DOCKER_IMAGE_NEW} not found."
     rm "${LOCKFILE}"
     exit 1
 fi
 
-
-# Detect running container from Traefik dynamic configuration
-echo "Get active container and image version"
+# Detect current active container and image version
+log_message "INFO" "Identifying active container and image version..."
 CONTAINER_OLD="${CONTAINER_LIVE}"
 if ! [[ "${CONTAINER_OLD}" =~ ^(blue|green)$ ]]; then
-    echo "Failure: CONTAINER_LIVE in .env invalid or missing"
+    log_message "ERROR" "Invalid CONTAINER_LIVE in .env."
     rm "${LOCKFILE}"
     exit 1
 else
     DOCKER_IMAGE_OLD=$(docker inspect --format '{{.Config.Image}}' "${CONTAINER_OLD}")
-    echo "Container ${CONTAINER_OLD} currently runs image ${DOCKER_IMAGE_OLD}"
+    log_message "INFO" "Current live container ${CONTAINER_OLD} uses image ${DOCKER_IMAGE_OLD}"
 fi
 
-
-# Update image version in .env
-echo "Update image version of inactive container to ${DOCKER_IMAGE_NEW} in .env"
+# Update .env for inactive container with new image version
+log_message "INFO" "Updating inactive container with new image ${DOCKER_IMAGE_NEW}..."
 if [[ "${CONTAINER_OLD}" == "blue" ]]; then
     sed -i "s|^DOCKER_IMAGE_GREEN=.*$|DOCKER_IMAGE_GREEN=${DOCKER_IMAGE_NEW}|g" .env
     CONTAINER_NEW="green"
@@ -180,104 +209,74 @@ fi
 # Todo: Implement database locking here if required
 # ./deploy_pre.sh
 
-
-# Wait for container to start up and perform health checks
-echo "Start ${CONTAINER_NEW} with docker image ${DOCKER_IMAGE_NEW}"
-if docker compose -f "${DOCKER_COMPOSE_FILE}" up -d "${CONTAINER_NEW}"; then
-    sleep 5
-else
-    echo "Failure: Container ${CONTAINER_NEW} startup error"
+# Start new container with the updated image
+log_message "INFO" "Deploying container ${CONTAINER_NEW}..."
+if ! docker compose -f "${DOCKER_COMPOSE_FILE}" up -d "${CONTAINER_NEW}"; then
+    log_message "ERROR" "Failed to deploy container ${CONTAINER_NEW}."
     rollback_container
     rm "${LOCKFILE}" && exit 1
 fi
 
-echo "Ensure container ${CONTAINER_NEW} uses the new image ${DOCKER_IMAGE_NEW}"
+# Check if container is using the correct image
+log_message "INFO" "Verifying container ${CONTAINER_NEW} image..."
 if ! [[ "$(docker inspect --format '{{.Config.Image}}' "${CONTAINER_NEW}")" == "${DOCKER_IMAGE_NEW}" ]]; then
-    echo "Failure: Container ${CONTAINER_NEW} still uses the old image"
+    log_message "ERROR" "Container ${CONTAINER_NEW} is not using the expected image."
     rollback_container
     rm "${LOCKFILE}" && exit 1
 fi
 
-echo "Get Docker integrated HEALTHCHECK status"
-if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}" 2>&1)" =~ 'map has no entry for key' ]]; then
-    echo "Warning: Image ${DOCKER_IMAGE_NEW} has no integrated HEALTHCHECK, will skip to HTTP checks"
-else
-    # perform up to 5 health checks every 3s, container may start slowly
-    for i in {1..5}; do
-        HEALTHCHECK_STATUS="$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}")"
-        case "${HEALTHCHECK_STATUS}" in
-            starting)
-                if [[ "${i}" -eq 5 ]]; then
-                    echo "Failure: Docker HEALTHCHECK is stuck in starting state"
-                    rollback_container
-                    rm "${LOCKFILE}" && exit 1
-                else
-                    echo "Warning: Docker HEALTHCHECK is starting, will re-check (${i}/5)"
-                    sleep 3
-                fi
-                ;;
-            healthy)
-                echo "Container ${CONTAINER_NEW} is healthy"
-                break
-                ;;
-            unhealthy)
-                echo "Failure: Container ${CONTAINER_NEW} is unhealthy"
-                rollback_container
-                rm "${LOCKFILE}" && exit 1
-                ;;
-            *)
-                echo "Failure: Unknown HEALTHCHECK status for ${CONTAINER_NEW}"
-                rollback_container
-                rm "${LOCKFILE}" && exit 1
-                ;;
-        esac
-    done
+# Run Docker health check
+log_message "INFO" "Running Docker health check for ${CONTAINER_NEW}..."
+dockerhealth_status "${CONTAINER_NEW}"
+if [ $? -eq 1 ]; then
+    log_message "ERROR" "Docker health check failed for ${CONTAINER_NEW}."
+    rollback_container
+    rm "${LOCKFILE}" && exit 1
 fi
 
 # Todo: Implement migrations for new image here
 # ./deploy_migrate.sh
 
-# HTTP health checks for new container accessible via custom host header
-echo "Ensure container ${CONTAINER_NEW} answers with HTTP status code 200"
-http_health_check_staging "${URL_MAIN}" "${CONTAINER_NEW}"
+# Perform HTTP health check
+log_message "INFO" "Performing HTTP health check for ${CONTAINER_NEW}..."
+http_health_check "${URL_MAIN}" "${CONTAINER_NEW}" "staging"
 if [ $? -eq 1 ]; then
-    echo "Failure: HTTP healthchecks failed"
+    log_message "ERROR" "HTTP health check failed for ${CONTAINER_NEW}."
     rollback_container
     # Todo: Implement migration rollback as well, then lock can be removed
     # rm "${LOCKFILE}" && exit 1
-    exit 1
 fi
 
-# Route live traffic to new container by switching rule for header-based routing
-echo "Route traffic for https://${URL_MAIN} to ${CONTAINER_NEW} and wait 10s"
+# Update Traefik routing
+log_message "INFO" "Updating Traefik routing for ${CONTAINER_NEW}..."
 yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
 yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
 # see providersThrottleDuration and pollInterval in traefik/traefik.yml
 sleep 10s
 
-# HTTP health check for live traffic
-echo "Ensure live traffic is answered by ${CONTAINER_NEW} with HTTP status code 200"
-http_health_check_live "${URL_MAIN}" "${CONTAINER_NEW}"
+# Final live traffic check
+log_message "INFO" "Performing final live traffic health check..."
+http_health_check "${URL_MAIN}" "${CONTAINER_NEW}" "live"
 if [ $? -eq 1 ]; then
-    echo "Failure: HTTP healthchecks failed"
+    log_message "ERROR" "Final live traffic check failed for ${CONTAINER_NEW}."
     rollback_container
     # Todo: Implement migration rollback as well, then lock can be removed
     # rm "${LOCKFILE}" && exit 1
-    exit 1
 fi
 
 # Todo: Implement database unlocking here if required
 # ./deploy_post.sh
 
-# Cleanup
-echo "Remove outdated container ${CONTAINER_OLD}"
+# Clean up old container
+log_message "INFO" "Removing outdated container ${CONTAINER_OLD}..."
 docker compose -f "${DOCKER_COMPOSE_FILE}" down "${CONTAINER_OLD}"
 
-# Update live container in .env
+# Update .env to reflect live container
+log_message "INFO" "Updating live container in .env..."
 sed -i "s|^CONTAINER_LIVE=.*$|CONTAINER_LIVE=${CONTAINER_NEW}|g" .env
 
-# Ensures that an old container version is never run when ${DOCKER_COMPOSE_FILE} is restarted.
-echo "Update image version for now inactive container ${CONTAINER_OLD} to ${DOCKER_IMAGE_NEW} in .env"
+# Ensure inactive container uses the new image version
+log_message "INFO" "Ensuring inactive container uses new image version..."
 if [[ "${CONTAINER_OLD}" == "blue" ]]; then
     sed -i "s|^DOCKER_IMAGE_BLUE=.*$|DOCKER_IMAGE_BLUE=${DOCKER_IMAGE_NEW}|g" .env
 elif [[ "${CONTAINER_OLD}" == "green" ]]; then
@@ -285,5 +284,5 @@ elif [[ "${CONTAINER_OLD}" == "green" ]]; then
 fi
 
 # Remove lockfile
-echo "Deployment finished. Remove lockfile and exit"
+log_message "INFO" "Deployment finished successfully. Removing lockfile."
 rm "${LOCKFILE}"
