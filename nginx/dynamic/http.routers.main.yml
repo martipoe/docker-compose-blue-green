@@ -1,8 +1,0 @@
-http:
-  routers:
-    main:
-      rule: Host(`__host__`)
-      service: green@docker
-      entryPoints:
-        - websecure
-      tls: true

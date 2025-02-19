@@ -1,0 +1,33 @@
+http:
+  routers:
+    blue:
+      rule: Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)
+      service: blue@docker
+      entryPoints:
+        - websecure
+      tls: true
+      middlewares:
+        - retry
+        - blue-header
+    green:
+      rule: Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)
+      service: green@docker
+      entryPoints:
+        - websecure
+      tls: true
+      middlewares:
+        - retry
+        - green-header
+  middlewares:
+    retry:
+      retry:
+        attempts: 5
+        initialInterval: 100ms
+    blue-header:
+      headers:
+        customResponseHeaders:
+          X-Deployment-Node: blue
+    green-header:
+      headers:
+        customResponseHeaders:
+          X-Deployment-Node: green

@@ -1,2 +1,2 @@
 <?php
-echo "Green\n";
+echo "green\n";

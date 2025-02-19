@@ -12,17 +12,10 @@ services:
       - ./apache/blue.index.php:/var/www/html/public/index.php
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.blue-router.entrypoints=websecure"
-      - "traefik.http.routers.blue-router.service=blue"
-      - "traefik.http.routers.blue-router.rule=(Host(`${URL_BLUE}`))"
-      - "traefik.http.routers.blue-router.tls=true"
       - "traefik.http.services.blue.loadbalancer.server.port=8080"
       - "traefik.http.services.blue.loadbalancer.server.scheme=http"
       - "traefik.http.services.blue.loadbalancer.healthcheck.interval=2s"
       - "traefik.http.services.blue.loadbalancer.healthcheck.timeout=10s"
-      - "traefik.http.routers.blue-router.middlewares=blue-retry"
-      - "traefik.http.middlewares.blue-retry.retry.attempts=5"
-      - "traefik.http.middlewares.blue-retry.retry.initialinterval=100ms"
       - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
 
   green:
@@ -33,17 +26,10 @@ services:
       - ./apache/green.index.php:/var/www/html/public/index.php
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.green-router.entrypoints=websecure"
-      - "traefik.http.routers.green-router.service=green"
-      - "traefik.http.routers.green-router.rule=(Host(`${URL_GREEN}`))"
-      - "traefik.http.routers.green-router.tls=true"
       - "traefik.http.services.green.loadbalancer.server.port=8080"
       - "traefik.http.services.green.loadbalancer.server.scheme=http"
       - "traefik.http.services.green.loadbalancer.healthcheck.interval=2s"
       - "traefik.http.services.green.loadbalancer.healthcheck.timeout=10s"
-      - "traefik.http.routers.green-router.middlewares=green-retry"
-      - "traefik.http.middlewares.green-retry.retry.attempts=5"
-      - "traefik.http.middlewares.green-retry.retry.initialinterval=100ms"
       - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
 
 networks:

@@ -28,7 +28,7 @@ providers:
     exposedByDefault: false
     network: "traefik_proxy"
   http:
-    endpoint: "http://dynamic:80/http.routers.main.yml"
+    endpoint: "http://dynamic:80/dynamic.yml"
     pollInterval: "5s"
     pollTimeout: "5s"
 

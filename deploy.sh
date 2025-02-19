@@ -41,16 +41,52 @@ set -euxo pipefail
 
 # Functions
 
-http_health_check() {
+http_health_check_live() {
     URL="$1"
+    NODE_EXPECTED="$2"
     # perform up to 5 health checks every 3s, container may start slowly
     for i in {1..5}; do
         HTTP_STATUS=$(curl -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL}")
-        if [[ "${HTTP_STATUS}" == '200' ]]; then
-            echo "Success: HTTP check for https://${URL} returned code ${HTTP_STATUS}"
+        CUSTOM_HEADER=$(curl -k -I --silent --output /dev/null --write-out '%header{x-deployment-node}' "https://${URL}")
+
+        if [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
+            echo "Success: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS}"
             return 0
+        elif [[ "${HTTP_STATUS}" != '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
+            echo "Failure: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS} [${1}/3]"
+            sleep 3
+        elif [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" != "${NODE_EXPECTED}" ]]; then
+            echo "Failure: Requests are not answered by Staging node ${NODE_EXPECTED} [${1}/3]"
+            sleep 3
         else
-            echo "Failure: HTTP check for https://${URL} returned code ${HTTP_STATUS} [${1}/3]"
+            echo "Failure: Unknown error, status code ${HTTP_STATUS}, node ${CUSTOM_HEADER}"
+            sleep 3
+        fi
+    done
+    # if retries failed, do not exit script and return failure
+    set +e
+    return 1
+}
+
+http_health_check_staging() {
+    URL="$1"
+    NODE_EXPECTED="$2"
+    # perform up to 5 health checks every 3s, container may start slowly
+    for i in {1..5}; do
+        HTTP_STATUS=$(curl --header 'X-Deployment-Status: staging' -k --silent --output /dev/null --write-out "%{http_code}" "https://${URL}")
+        CUSTOM_HEADER=$(curl -I --header 'X-Deployment-Status: staging' -k --silent --output /dev/null --write-out '%header{x-deployment-node}' "https://${URL}")
+
+        if [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
+            echo "Success: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS}"
+            return 0
+        elif [[ "${HTTP_STATUS}" != '200' ]] && [[ "${CUSTOM_HEADER}" == "${NODE_EXPECTED}" ]]; then
+            echo "Failure: Staging node ${NODE_EXPECTED} answers with status code ${HTTP_STATUS} [${1}/3]"
+            sleep 3
+        elif [[ "${HTTP_STATUS}" == '200' ]] && [[ "${CUSTOM_HEADER}" != "${NODE_EXPECTED}" ]]; then
+            echo "Failure: Requests are not answered by Staging node ${NODE_EXPECTED} [${1}/3]"
+            sleep 3
+        else
+            echo "Failure: Unknown error, status code ${HTTP_STATUS}, node ${CUSTOM_HEADER}"
             sleep 3
         fi
     done
@@ -70,6 +106,14 @@ rollback_container(){
         sed -i "s|^DOCKER_IMAGE_GREEN=.*$|DOCKER_IMAGE_GREEN=${DOCKER_IMAGE_OLD}|g" .env
     fi
     echo "Container ${CONTAINER_NEW} rolled back to previous state"
+    echo "Ensure Traefik dynamic configuration is reset to previous state"
+    yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
+    yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
+    http_health_check_live "${URL_MAIN}" "${CONTAINER_OLD}"
+    if [ $? -eq 1 ]; then
+        echo "Failure: ${URL_MAIN} is still served by ${CONTAINER_NEW}"
+        exit 1
+    fi
     return 0
 }
 
@@ -95,7 +139,7 @@ if ! [ -f ".env" ]; then
     rm "${LOCKFILE}"
     exit 1
 else
-    # requires URL_MAIN, URL_BLUE, URL_GREEN
+    # requires URL_MAIN and CONTAINER_LIVE
     source .env
 fi
 
@@ -111,10 +155,9 @@ fi
 
 # Detect running container from Traefik dynamic configuration
 echo "Get active container and image version"
-SERVICE_ACTIVE=$(yq -r .http.routers.main.service nginx/dynamic/http.routers.main.yml)
-CONTAINER_OLD="${SERVICE_ACTIVE%%@*}"
+CONTAINER_OLD="${CONTAINER_LIVE}"
 if ! [[ "${CONTAINER_OLD}" =~ ^(blue|green)$ ]]; then
-    echo "Failure: No container is active"
+    echo "Failure: CONTAINER_LIVE in .env invalid or missing"
     rm "${LOCKFILE}"
     exit 1
 else
@@ -157,7 +200,7 @@ fi
 
 echo "Get Docker integrated HEALTHCHECK status"
 if [[ "$(docker container inspect --format='{{.State.Health.Status}}' "${CONTAINER_NEW}" 2>&1)" =~ 'map has no entry for key' ]]; then
-    echo "Warning: Image ${DOCKER_IMAGE_NEW} has no integrated HEALTHCHECK, will skip to HTTP check"
+    echo "Warning: Image ${DOCKER_IMAGE_NEW} has no integrated HEALTHCHECK, will skip to HTTP checks"
 else
     # perform up to 5 health checks every 3s, container may start slowly
     for i in {1..5}; do
@@ -194,39 +237,29 @@ fi
 # Todo: Implement migrations for new image here
 # ./deploy_migrate.sh
 
-# HTTP health checks for dedicated container urls
-echo "Ensure the dedicated URL for container ${CONTAINER_NEW} returns HTTP status code 200"
-if [[ "${CONTAINER_NEW}" == "blue" ]]; then
-    http_health_check "${URL_BLUE}"
-    if [ $? -eq 1 ]; then
-        echo "Failure: HTTP healthchecks failed for ${URL_BLUE}"
-        rollback_container
-        # Todo: Implement migration rollback as well, then lock can be removed
-        # rm "${LOCKFILE}" && exit 1
-        exit 1
-    fi
-elif [[ "${CONTAINER_NEW}" == "green" ]]; then
-    http_health_check "${URL_GREEN}"
-    if [ $? -eq 1 ]; then
-        echo "Failure: HTTP healthchecks failed for ${URL_GREEN}"
-        rollback_container
-        # Todo: Implement migration rollback as well, then lock can be removed
-        # rm "${LOCKFILE}" && exit 1
-        exit 1
-    fi
+# HTTP health checks for new container accessible via custom host header
+echo "Ensure container ${CONTAINER_NEW} answers with HTTP status code 200"
+http_health_check_staging "${URL_MAIN}" "${CONTAINER_NEW}"
+if [ $? -eq 1 ]; then
+    echo "Failure: HTTP healthchecks failed"
+    rollback_container
+    # Todo: Implement migration rollback as well, then lock can be removed
+    # rm "${LOCKFILE}" && exit 1
+    exit 1
 fi
 
-# Promote new container to serve requests on primary url
+# Route live traffic to new container by switching rule for header-based routing
 echo "Route traffic for https://${URL_MAIN} to ${CONTAINER_NEW} and wait 10s"
-yq -yi --arg c "${CONTAINER_NEW}" '.http.routers.main.service = $c + "@docker"' nginx/dynamic/http.routers.main.yml
+yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
+yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
 # see providersThrottleDuration and pollInterval in traefik/traefik.yml
 sleep 10s
 
-# HTTP health check on primary url
-echo "Ensure https://${URL_MAIN} is up with HTTP status code 200"
-http_health_check "${URL_MAIN}"
+# HTTP health check for live traffic
+echo "Ensure live traffic is answered by ${CONTAINER_NEW} with HTTP status code 200"
+http_health_check_live "${URL_MAIN}" "${CONTAINER_NEW}"
 if [ $? -eq 1 ]; then
-    echo "Failure: HTTP healthchecks failed for ${URL_MAIN}"
+    echo "Failure: HTTP healthchecks failed"
     rollback_container
     # Todo: Implement migration rollback as well, then lock can be removed
     # rm "${LOCKFILE}" && exit 1
@@ -239,6 +272,9 @@ fi
 # Cleanup
 echo "Remove outdated container ${CONTAINER_OLD}"
 docker compose -f "${DOCKER_COMPOSE_FILE}" down "${CONTAINER_OLD}"
+
+# Update live container in .env
+sed -i "s|^CONTAINER_LIVE=.*$|CONTAINER_LIVE=${CONTAINER_NEW}|g" .env
 
 # Ensures that an old container version is never run when ${DOCKER_COMPOSE_FILE} is restarted.
 echo "Update image version for now inactive container ${CONTAINER_OLD} to ${DOCKER_IMAGE_NEW} in .env"

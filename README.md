@@ -1,23 +1,35 @@
 # docker-compose-blue-green
 
-Example implementation for Blue-Green deployments with Docker Compose and Traefik.
+Example implementation for Blue-Green deployments with Docker Compose and Traefik with routing based on HTTP headers.
 
-While testing similar implementations at https://github.com/straypaper/blue-green and https://frustrated.blog/2021/03/16/traefik_blue_green.html, I encountered problems with [Traefik File Provider](https://doc.traefik.io/traefik/providers/file/) and docker bind mounts - even though *directory* configuration and *providersThrottleDuration* were set, there still were 404s for up to 60s during dynamic configuration changes.
+While testing subdomain-based implementations at https://github.com/straypaper/blue-green and https://frustrated.blog/2021/03/16/traefik_blue_green.html, I encountered problems with [Traefik File Provider](https://doc.traefik.io/traefik/providers/file/) and docker bind mounts - even though *directory* configuration and *providersThrottleDuration* were set, there still were 404s for up to 60s during dynamic configuration changes.
 
 Workaround:
 - These issues did not arise with the [HTTP Provider](https://doc.traefik.io/traefik/providers/http/). This is why an Nginx container serves the dynamic configuration as yaml template via HTTP, using https://nginx.org/en/docs/http/ngx_http_sub_module.html for dynamic contents.
 - During Nginx container restarts (updates...), Traefik will keep the dynamic configuration in memory until the HTTP endpoint is reachable again.
 
+Another issue with subdomain-based routing is configuration overhead in terms of DNS and application (especially if designed for single domain usage).
+    - An alternative to host names are custom headers: https://doc.traefik.io/traefik/routing/routers/#header-and-headerregexp
+
 # Features
 
 - Blue-Green deployments - nodes are replaced interchangeably with each new container version.
-- Zero-Downtime
-- Tests: Docker HEALTHCHECK and HTTP status for primary and container-specific domains.
+- Zero-Downtime.
+- Same hostname, routing via custom HTTP headers.
+- Healthchecks:
+    - Docker HEALTHCHECK if supported by image
+    - HTTP status code must be 200
+    - HTTP custom header must match node name
 - Rollbacks: If deployments fail, the container version is rolled back automatically.
+- Staging node is stopped after deployment.
+
+# Schema
+
+![schema](docs/blue-green.drawio.png)
 
 ## Prerequisites
 
-- Add domains in */etc/hosts*: `127.0.0.1 localhost main.lan blue.lan green.lan`
+- Add domain in */etc/hosts*: `127.0.0.1 localhost main.lan`
 - Create external docker network for backend communication: `docker network create traefik_proxy`
 - Generate self-signed SSL certificate `openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout ./traefik/certs/cert.key -out ./traefik/certs/cert.crt`
 - For Green and Blue service, the **container_name** in docker-compose.yml must be explicitely set to either *green* or *blue* (see *project.docker-compose.yml*).
@@ -38,10 +50,17 @@ DOCKER_IMAGE_BLUE=serversideup/php:8.2-fpm-apache@sha256:0d08c8277aefcbf2780e947
 DOCKER_IMAGE_GREEN=serversideup/php:8.2-fpm-apache@sha256:0d08c8277aefcbf2780e94774d8a3464cbcf0d701c0a78795a6c2c0432beef0d
 ```
 
-Run continuous HTTP check:
+Run continuous HTTP check on live node:
 ```bash
 while true; do
     curl -k https://main.lan
+done
+```
+
+Run continuous HTTP check on staging node:
+```bash
+while true; do
+    curl -k --header 'X-Deployment-Status: staging' https://main.lan
 done
 ```
 
@@ -86,4 +105,4 @@ CONTAINER ID   IMAGE                             COMMAND                  CREATE
     - Let's Encrypt
     - ACLs
 - HTTP provider:
-    - Currently the state of the active node is stored in nginx/dynamic/http.routers.main.yml, centralising this in .env would be better.
+    - Currently the state of the active node is stored in nginx/dynamic/dynamic.yml, centralising this in .env would be better.
