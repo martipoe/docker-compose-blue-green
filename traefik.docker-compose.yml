@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
     pull_policy: always
     environment:
-      URL_MAIN: ${URL_MAIN}
+      FQDN_MAIN: ${FQDN_MAIN}
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/dynamic/dynamic.yml:/usr/share/nginx/html/dynamic.yml:ro

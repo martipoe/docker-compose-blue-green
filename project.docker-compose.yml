@@ -17,7 +17,6 @@ services:
       - "traefik.http.services.blue.loadbalancer.healthcheck.port=8080"
       - "traefik.http.services.blue.loadbalancer.healthcheck.interval=2s"
       - "traefik.http.services.blue.loadbalancer.healthcheck.timeout=10s"
-      - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
 
   green:
     <<: *config-shared
@@ -32,8 +31,6 @@ services:
       - "traefik.http.services.green.loadbalancer.healthcheck.port=8080"
       - "traefik.http.services.green.loadbalancer.healthcheck.interval=2s"
       - "traefik.http.services.green.loadbalancer.healthcheck.timeout=10s"
-      - "traefik.docker.network=${TRAEFIK_BACKEND_NET}"
-
 networks:
   traefik_proxy:
     external: true

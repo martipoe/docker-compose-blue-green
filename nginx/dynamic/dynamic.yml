@@ -1,7 +1,7 @@
 http:
   routers:
     blue:
-      rule: Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)
+      rule: Host(`__fqdn_main__`) && ! Header(`X-Deployment-Status`, `staging`)
       service: blue@docker
       entryPoints:
         - websecure
@@ -10,7 +10,7 @@ http:
         - retry
         - blue-header
     green:
-      rule: Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)
+      rule: Host(`__fqdn_main__`) && Header(`X-Deployment-Status`, `staging`)
       service: green@docker
       entryPoints:
         - websecure

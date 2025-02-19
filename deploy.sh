@@ -139,13 +139,13 @@ rollback_container() {
 
     # Reset Traefik dynamic configuration
     log_message "INFO" "Resetting Traefik dynamic configuration."
-    yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
-    yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
+    yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__fqdn_main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
+    yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__fqdn_main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
 
     # Health check for live node
-    http_health_check "${URL_MAIN}" "${CONTAINER_OLD}" "live"
+    http_health_check "${FQDN_MAIN}" "${CONTAINER_OLD}" "live"
     if [ $? -eq 1 ]; then
-        log_message "ERROR" "${URL_MAIN} is still served by ${CONTAINER_NEW}, rollback failed."
+        log_message "ERROR" "${FQDN_MAIN} is still served by ${CONTAINER_NEW}, rollback failed."
         exit 1
     fi
 }
@@ -239,7 +239,7 @@ fi
 
 # Perform HTTP health check
 log_message "INFO" "Performing HTTP health check for ${CONTAINER_NEW}..."
-http_health_check "${URL_MAIN}" "${CONTAINER_NEW}" "staging"
+http_health_check "${FQDN_MAIN}" "${CONTAINER_NEW}" "staging"
 if [ $? -eq 1 ]; then
     log_message "ERROR" "HTTP health check failed for ${CONTAINER_NEW}."
     rollback_container
@@ -249,14 +249,14 @@ fi
 
 # Update Traefik routing
 log_message "INFO" "Updating Traefik routing for ${CONTAINER_NEW}..."
-yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
-yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
+yq -yi --arg c "${CONTAINER_NEW}" '.http.routers[$c].rule = "Host(`__fqdn_main__`) && ! Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
+yq -yi --arg c "${CONTAINER_OLD}" '.http.routers[$c].rule = "Host(`__fqdn_main__`) && Header(`X-Deployment-Status`, `staging`)"' nginx/dynamic/dynamic.yml
 # see providersThrottleDuration and pollInterval in traefik/traefik.yml
 sleep 10s
 
 # Final live traffic check
 log_message "INFO" "Performing final live traffic health check..."
-http_health_check "${URL_MAIN}" "${CONTAINER_NEW}" "live"
+http_health_check "${FQDN_MAIN}" "${CONTAINER_NEW}" "live"
 if [ $? -eq 1 ]; then
     log_message "ERROR" "Final live traffic check failed for ${CONTAINER_NEW}."
     rollback_container
